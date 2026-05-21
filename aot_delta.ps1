@@ -16,16 +16,26 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 # ── Tracked tables ────────────────────────────────────────────────────────────
 # Add tables here as your content expands.
 $TRACKED_TABLES = @(
-    "npc_types",
-    "npc_spells",
-    "npc_spells_entries",
-    "spawngroup",
-    "spawnentry",
-    "spawn2",
+    "aa_ability",
+    "aa_rank",
+    "aa_rank_effects",
+    "aa_rank_prereqs",
+    "alternate_currency",
+    "base_data",
+    "items",
+    "lootdrop",
+    "lootdrop_entries",
     "loottable",
     "loottable_entries",
-    "lootdrop",
-    "lootdrop_entries"
+    "npc_spells",
+    "npc_spells_entries",
+    "npc_types",
+    "spawn2",
+    "spawnentry",
+    "spawngroup",
+    "spells_new",
+    "tradeskill_recipe",
+    "tradeskill_recipe_entries"
 )
 
 $DB_WORK = "peq"          # your working database

@@ -1,0 +1,2 @@
+# Force LF for SQL files so they run cleanly on both Windows and Linux
+*.sql text eol=lf

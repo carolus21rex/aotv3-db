@@ -12,6 +12,9 @@
 
     Environment overrides: DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME, MIGRATIONS_DIR, MYSQL_EXE
 #>
+$scriptDir = "/home/papa/aotv3-db"
+$searchBase = "/home/papa/aotv3-db"
+
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -33,22 +36,25 @@ function Die { param($msg) Write-Err $msg; Exit-Script 1 }
 
 # ── DB credentials (defaults match EQEmu devcontainer) ──────────────────────
 
-$DB_HOST = "127.0.0.1"
+$DB_HOST = "192.168.0.93"
 $DB_PORT = "3306"
-$DB_USER = "peq"
-$DB_PASS = "peqpass"
+$DB_USER = "eqemu"
+$DB_PASS = "papa123"
 $DB_NAME = "peq"
 
 # Search for eqemu_config.json starting from script directory and walking up
 $configFile = $null
 $searchBase = $scriptDir
 for ($i = 0; $i -lt 5; $i++) {
+    if (-not $searchBase) { break }
     $candidate = Join-Path $searchBase "eqemu_config.json"
     if (Test-Path $candidate) {
         $configFile = (Resolve-Path $candidate).Path
         break
     }
-    $searchBase = Split-Path -Parent $searchBase
+    $parent = Split-Path -Parent $searchBase
+    if ($parent -eq $searchBase) { break }
+    $searchBase = $parent
 }
 
 if ($configFile) {

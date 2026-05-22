@@ -1,4 +1,6 @@
 config.ini
+aot_migrate.py
+aot_delta.py
 __pycache__/
 *.pyc
 build/

@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+# TEST COMMIT: verifying git push authentication
 <#
 .SYNOPSIS
     AoTv3 database delta generator.
@@ -13,86 +14,17 @@
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-# ── Tracked tables ────────────────────────────────────────────────────────────
-# Add tables here as your content expands.
-$TRACKED_TABLES = @(
-    "aa_ability",
-    "aa_rank",
-    "aa_rank_effects",
-    "aa_rank_prereqs",
-    "alternate_currency",
-    "base_data",
-    "items",
-    "lootdrop",
-    "lootdrop_entries",
-    "loottable",
-    "loottable_entries",
-    "npc_spells",
-    "npc_spells_entries",
-    "npc_types",
-    "spawn2",
-    "spawnentry",
-    "spawngroup",
-    "spells_new",
-    "tradeskill_recipe",
-    "tradeskill_recipe_entries"
-)
-
-$DB_WORK = "peq"          # your working database
-$DB_LIVE = "aot_current"  # committed-state reference database
-
-# ── Output helpers ────────────────────────────────────────────────────────────
-
-function Write-Status { param($msg) Write-Host "[delta] $msg" -ForegroundColor Cyan }
-function Write-Ok     { param($msg) Write-Host "[delta] $msg" -ForegroundColor Green }
-function Write-Warn   { param($msg) Write-Host "[delta] WARNING: $msg" -ForegroundColor Yellow }
-function Write-Err    { param($msg) Write-Host "[delta] ERROR: $msg" -ForegroundColor Red }
-
-function Exit-Script {
-    param([int]$code = 0)
-    Write-Host ""
-    Write-Host "Press Enter to close..." -ForegroundColor DarkGray
-    $null = Read-Host
-    exit $code
-}
-
-function Die { param($msg) Write-Err $msg; Exit-Script 1 }
-
-# ── Credentials (same search logic as aot_migrate.ps1) ───────────────────────
-
-$DB_HOST = "127.0.0.1"
+$DB_HOST = "192.168.0.93"
 $DB_PORT = "3306"
-$DB_USER = "peq"
-$DB_PASS = "peqpass"
+$DB_USER = "eqemu"
+$DB_PASS = "papa123"
+$DB_WORK = "peq"
+$DB_LIVE = "aot_current"
+# ...these are now set at the top of the script with the correct values...
 
-$configFile = $null
-$searchBase = $scriptDir
-for ($i = 0; $i -lt 5; $i++) {
-    $candidate = Join-Path $searchBase "eqemu_config.json"
-    if (Test-Path $candidate) { $configFile = (Resolve-Path $candidate).Path; break }
-    $searchBase = Split-Path -Parent $searchBase
-}
+function Die { param($msg) Write-Host $msg -ForegroundColor Red; exit 1 }
 
-if ($configFile) {
-    try {
-        $cfg = Get-Content $configFile -Raw | ConvertFrom-Json
-        $db = $cfg.server.database
-        if ($db.host)     { $DB_HOST = [string]$db.host }
-        if ($db.port)     { $DB_PORT = [string]$db.port }
-        if ($db.username) { $DB_USER = [string]$db.username }
-        if ($db.password) { $DB_PASS = [string]$db.password }
-    } catch { Write-Warn "Could not parse eqemu_config.json, using defaults" }
-} else {
-    Write-Warn "eqemu_config.json not found, using defaults"
-}
-
-if ($env:DB_HOST) { $DB_HOST = $env:DB_HOST }
-if ($env:DB_PORT) { $DB_PORT = $env:DB_PORT }
-if ($env:DB_USER) { $DB_USER = $env:DB_USER }
-if ($env:DB_PASS) { $DB_PASS = $env:DB_PASS }
-
-# ── Find mysql + mysqldump ────────────────────────────────────────────────────
-
+# --- All function definitions ---
 function Find-Exe {
     param([string[]]$names, [string[]]$extraPaths)
     foreach ($name in $names) {
@@ -105,101 +37,6 @@ function Find-Exe {
     }
     return $null
 }
-
-$commonPaths = @(
-    "${env:ProgramFiles}\MariaDB*\bin\mysql.exe",
-    "${env:ProgramFiles(x86)}\MariaDB*\bin\mysql.exe",
-    "${env:ProgramFiles}\MySQL\MySQL Server*\bin\mysql.exe",
-    "C:\xampp\mysql\bin\mysql.exe"
-)
-$mysqlExe    = Find-Exe @("mysql","mariadb") $commonPaths
-$mysqldumpExe = Find-Exe @("mysqldump") ($commonPaths -replace 'mysql\.exe','mysqldump.exe')
-
-if (-not $mysqlExe)     { Die "mysql not found. Add MySQL/MariaDB to PATH or set MYSQL_EXE." }
-if (-not $mysqldumpExe) { Die "mysqldump not found. It should be in the same folder as mysql." }
-
-$mysqlArgs = @("-h$DB_HOST", "-P$DB_PORT", "-u$DB_USER", "-p$DB_PASS")
-
-# ── MySQL helpers ─────────────────────────────────────────────────────────────
-
-function Invoke-SQL {
-    param([string]$db, [string]$query, [switch]$Scalar)
-    $args = $mysqlArgs + @("--database=$db")
-    if ($Scalar) { $args += "-sN" }
-    $out = & $mysqlExe @args -e $query
-    return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n").Trim() }
-}
-
-function Invoke-SQLFile {
-    param([string]$db, [string]$filePath)
-    $errFile = [System.IO.Path]::GetTempFileName()
-    try {
-        $proc = Start-Process -FilePath $mysqlExe `
-            -ArgumentList ($mysqlArgs + @("--database=$db")) `
-            -RedirectStandardInput $filePath `
-            -RedirectStandardError $errFile `
-            -Wait -PassThru -NoNewWindow
-        if ($proc.ExitCode -ne 0) {
-            $errText = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
-            if ($errText) { Write-Host $errText.Trim() -ForegroundColor DarkRed }
-        }
-        return $proc.ExitCode
-    } finally {
-        Remove-Item $errFile -ErrorAction SilentlyContinue
-    }
-}
-
-# ── Migrations repo location ──────────────────────────────────────────────────
-
-$repoRoot      = $scriptDir
-$migrationsDir = Join-Path $scriptDir "migrations"
-
-# ── Step 1: Pull latest migrations ───────────────────────────────────────────
-
-Write-Status "Pulling latest migrations from git..."
-$gitOut = & git -C $repoRoot pull 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Die "git pull failed. Resolve any conflicts before generating a delta.`n$gitOut"
-}
-Write-Ok ($gitOut | Select-Object -Last 1)
-
-# ── Step 2: Ensure aot_current exists and has all tracked tables ──────────────
-
-Write-Status "Checking $DB_LIVE database..."
-
-$r = Invoke-SQL "information_schema" "CREATE DATABASE IF NOT EXISTS ``$DB_LIVE``;"
-if ($r.ExitCode -ne 0) { Die "Could not create $DB_LIVE database: $($r.Output)" }
-
-foreach ($table in $TRACKED_TABLES) {
-    $r = Invoke-SQL $DB_LIVE "CREATE TABLE IF NOT EXISTS ``$DB_LIVE``.``$table`` LIKE ``$DB_WORK``.``$table``;"
-    if ($r.ExitCode -ne 0) { Die "Could not create $DB_LIVE.$table`: $($r.Output)" }
-}
-
-# ── Step 3: Apply any pending migrations to aot_current ──────────────────────
-
-Write-Status "Syncing $DB_LIVE with committed migrations..."
-
-$trackQ = "CREATE TABLE IF NOT EXISTS db_migrations (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, filename VARCHAR(255) NOT NULL UNIQUE, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
-$r = Invoke-SQL $DB_LIVE $trackQ
-if ($r.ExitCode -ne 0) { Die "Could not create tracking table in $DB_LIVE`: $($r.Output)" }
-
-$sqlFiles = Get-ChildItem -Path $migrationsDir -Filter "*.sql" -ErrorAction SilentlyContinue | Sort-Object Name
-$synced = 0
-foreach ($file in $sqlFiles) {
-    $check = Invoke-SQL $DB_LIVE "SELECT COUNT(*) FROM db_migrations WHERE filename='$($file.Name)';" -Scalar
-    if (([int]$check.Output) -gt 0) { continue }
-
-    Write-Host "  sync  $($file.Name) ..."
-    $code = Invoke-SQLFile $DB_LIVE $file.FullName
-    if ($code -ne 0) { Die "Failed to apply $($file.Name) to $DB_LIVE" }
-    $null = Invoke-SQL $DB_LIVE "INSERT IGNORE INTO db_migrations (filename) VALUES ('$($file.Name)');"
-    $synced++
-}
-if ($synced -gt 0) { Write-Ok "Synced $synced migration(s) to $DB_LIVE" } else { Write-Ok "$DB_LIVE is up to date" }
-
-# ── Step 4: Compute delta ─────────────────────────────────────────────────────
-
-Write-Status "Comparing $DB_WORK vs $DB_LIVE..."
 
 function Get-TableColumns {
     param([string]$tableName)
@@ -234,113 +71,125 @@ function Get-DumpLines {
     return ($out | Where-Object { $_ -match '^REPLACE INTO' })
 }
 
-$deltaLines = [System.Collections.Generic.List[string]]::new()
-$changedTables = [System.Collections.Generic.List[string]]::new()
+function Invoke-SQL {
+    param([string]$db, [string]$query, [switch]$Scalar)
+    $args = $mysqlArgs + @("--database=$db")
+    if ($Scalar) { $args += "-sN" }
+    $out = & $mysqlExe @args -e $query
+    return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n").Trim() }
+}
 
-foreach ($table in $TRACKED_TABLES) {
-    $info = Get-TableColumns $table
-    if ($info.PK.Count -eq 0) { Write-Warn "No PK on $table, skipping"; continue }
-
-    $tableDelta = [System.Collections.Generic.List[string]]::new()
-    $joinCond = ($info.PK | ForEach-Object { "a.``$_`` = p.``$_``" }) -join " AND "
-    $pCRC = Build-CRC $info.All "p"
-    $aCRC = Build-CRC $info.All "a"
-
-    if ($info.PK.Count -eq 1) {
-        $pk = $info.PK[0]
-
-        # New or modified rows
-        $changedQ = "SELECT GROUP_CONCAT(DISTINCT p.``$pk`` ORDER BY p.``$pk`` SEPARATOR ',') FROM ``$DB_WORK``.``$table`` p LEFT JOIN ``$DB_LIVE``.``$table`` a ON a.``$pk`` = p.``$pk`` WHERE a.``$pk`` IS NULL OR ($pCRC != $aCRC);"
-        $changedIDs = (Invoke-SQL $DB_WORK $changedQ -Scalar).Output.Trim()
-
-        if ($changedIDs -and $changedIDs -ne 'NULL') {
-            $lines = Get-DumpLines $table "$pk IN ($changedIDs)"
-            if ($lines) { $tableDelta.AddRange([string[]]$lines) }
+function Invoke-SQLFile {
+    param([string]$db, [string]$filePath)
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $mysqlExe `
+            -ArgumentList ($mysqlArgs + @("--database=$db")) `
+            -RedirectStandardInput $filePath `
+            -RedirectStandardError $errFile `
+            -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) {
+            $errText = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
+            if ($errText) { Write-Host $errText.Trim() -ForegroundColor DarkRed }
         }
-
-        # Deleted rows
-        $deletedQ = "SELECT GROUP_CONCAT(a.``$pk`` ORDER BY a.``$pk`` SEPARATOR ',') FROM ``$DB_LIVE``.``$table`` a LEFT JOIN ``$DB_WORK``.``$table`` p ON p.``$pk`` = a.``$pk`` WHERE p.``$pk`` IS NULL;"
-        $deletedIDs = (Invoke-SQL $DB_WORK $deletedQ -Scalar).Output.Trim()
-
-        if ($deletedIDs -and $deletedIDs -ne 'NULL') {
-            $tableDelta.Add("DELETE FROM ``$table`` WHERE ``$pk`` IN ($deletedIDs);")
-        }
-
-    } else {
-        # Composite PK: check if anything differs, then do full table REPLACE
-        $diffQ = "SELECT COUNT(*) FROM ``$DB_WORK``.``$table`` p LEFT JOIN ``$DB_LIVE``.``$table`` a ON $joinCond WHERE a.$($info.PK[0]) IS NULL OR ($pCRC != $aCRC);"
-        $diffCount = [int](Invoke-SQL $DB_WORK $diffQ -Scalar).Output.Trim()
-
-        $delQ = "SELECT COUNT(*) FROM ``$DB_LIVE``.``$table`` a LEFT JOIN ``$DB_WORK``.``$table`` p ON $joinCond WHERE p.$($info.PK[0]) IS NULL;"
-        $delCount = [int](Invoke-SQL $DB_WORK $delQ -Scalar).Output.Trim()
-
-        if ($diffCount -gt 0 -or $delCount -gt 0) {
-            $tableDelta.Add("DELETE FROM ``$table``;")
-            $lines = Get-DumpLines $table "1=1"
-            if ($lines) { $tableDelta.AddRange([string[]]$lines) }
-        }
-    }
-
-    if ($tableDelta.Count -gt 0) {
-        $deltaLines.Add("")
-        $deltaLines.Add("-- ── $table " + ("-" * (60 - $table.Length)))
-        $deltaLines.AddRange($tableDelta)
-        $changedTables.Add($table)
+        return $proc.ExitCode
+    } finally {
+        Remove-Item $errFile -ErrorAction SilentlyContinue
     }
 }
 
-if ($deltaLines.Count -eq 0) {
-    Write-Ok "No changes detected — $DB_WORK matches $DB_LIVE"
-    Exit-Script 0
-}
-
-Write-Ok "Changes detected in: $($changedTables -join ', ')"
-
-# ── Step 5: Write migration file ──────────────────────────────────────────────
-
-$timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
-$tableSlug   = ($changedTables | Select-Object -First 3) -join "_"
-$filename    = "${timestamp}_content_delta_${tableSlug}.sql"
-$filePath    = Join-Path $migrationsDir $filename
-
-$header = @(
-    "-- AoTv3 content delta",
-    "-- Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
-    "-- Changed tables: $($changedTables -join ', ')",
-    ""
+# --- Config/environment variable setup ---
+$commonPaths = @(
+    "${env:ProgramFiles}\MariaDB*\bin\mysql.exe",
+    "${env:ProgramFiles(x86)}\MariaDB*\bin\mysql.exe",
+    "${env:ProgramFiles}\MySQL\MySQL Server*\bin\mysql.exe",
+    "C:\xampp\mysql\bin\mysql.exe"
 )
+$mysqlExe    = Find-Exe @("mysql","mariadb") $commonPaths
+$mysqldumpExe = Find-Exe @("mysqldump") ($commonPaths -replace 'mysql\.exe','mysqldump.exe')
 
-$content = ($header + $deltaLines) -join "`n"
-[System.IO.File]::WriteAllText($filePath, $content, [System.Text.Encoding]::UTF8)
-Write-Status "Wrote: $filename"
+if (-not $mysqlExe)     { Die "mysql not found. Add MySQL/MariaDB to PATH or set MYSQL_EXE." }
+if (-not $mysqldumpExe) { Die "mysqldump not found. It should be in the same folder as mysql." }
 
-# ── Step 6: Commit and push ───────────────────────────────────────────────────
+# ...already set at the top of the script...
+$DB_WORK = "peq"
+$DB_LIVE = "aot_current"
 
-Write-Status "Committing and pushing..."
+$mysqlArgs = @("-h$DB_HOST", "-P$DB_PORT", "-u$DB_USER", "-p$DB_PASS")
 
-& git -C $repoRoot add "migrations/$filename"
-if ($LASTEXITCODE -ne 0) { Die "git add failed" }
+$repoRoot      = $scriptDir
+$migrationsDir = Join-Path $scriptDir "migrations"
 
-$commitMsg = "Content delta: $($changedTables -join ', ')"
-& git -C $repoRoot commit -m $commitMsg
-if ($LASTEXITCODE -ne 0) { Die "git commit failed" }
-
-& git -C $repoRoot push
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "git push failed — another commit may have landed since your pull."
-    Write-Host "Run: git -C `"$repoRoot`" pull --rebase && git -C `"$repoRoot`" push" -ForegroundColor Yellow
-    Exit-Script 1
+# --- DYNAMIC TABLE FETCHING ---
+Write-Host "Fetching all tables from $DB_WORK..."
+$getTablesQuery = "SHOW TABLES FROM ``$DB_WORK``;"
+$tableListResult = Invoke-SQL -db $DB_WORK -query $getTablesQuery -Scalar
+$dbWorkVal = $DB_WORK
+if ($tableListResult.ExitCode -ne 0 -or !$tableListResult.Output) {
+    Die ('Failed to fetch table list from ' + $dbWorkVal + ': ' + $tableListResult.Output)
 }
+$TRACKED_TABLES = $tableListResult.Output -split "`n" |
+    Where-Object {
+        $_ -and $_ -notmatch "^db_migrations$" `
+        -and $_ -notmatch "^account" `
+        -and $_ -notmatch "^character_" `
+        -and $_ -notmatch "^inventory" `
+        -and $_ -notmatch "^friends$" `
+        -and $_ -notmatch "^guild_" `
+        -and $_ -notmatch "^sharedbank$" `
+        -and $_ -notmatch "^buyer" `
+        -and $_ -notmatch "^trader" `
+        -and $_ -notmatch "^mail$" `
+        -and $_ -notmatch "^petitions$" `
+        -and $_ -notmatch "^login_" `
+        -and $_ -notmatch "^player_" `
+        -and $_ -notmatch "^completed_" `
+        -and $_ -notmatch "^chatchannel" `
+        -and $_ -notmatch "^chatchannels$" `
+        -and $_ -notmatch "^raid_" `
+        -and $_ -notmatch "^group_" `
+        -and $_ -notmatch "^veteran_reward_templates$" `
+        -and $_ -notmatch "^keyring$" `
+        -and $_ -notmatch "^progressive_dungeon_" `
+        -and $_ -notmatch "^completed_tasks$" `
+        -and $_ -notmatch "^completed_shared_tasks$" `
+        -and $_ -notmatch "^completed_shared_task_" `
+        -and $_ -notmatch "^character_stats_record$" `
+        -and $_ -notmatch "^character_expedition_lockouts$" `
+        -and $_ -notmatch "^character_enabledtasks$" `
+        -and $_ -notmatch "^character_task_timers$" `
+        -and $_ -notmatch "^character_tasks$" `
+        -and $_ -notmatch "^character_tribute$" `
+        -and $_ -notmatch "^character_alt_currency$" `
+        -and $_ -notmatch "^character_alternate_abilities$" `
+        -and $_ -notmatch "^character_auras$" `
+        -and $_ -notmatch "^character_bandolier$" `
+        -and $_ -notmatch "^character_bind$" `
+        -and $_ -notmatch "^character_buffs$" `
+        -and $_ -notmatch "^character_corpse_items$" `
+        -and $_ -notmatch "^character_corpses$" `
+        -and $_ -notmatch "^character_currency$" `
+        -and $_ -notmatch "^character_data$" `
+        -and $_ -notmatch "^character_disciplines$" `
+        -and $_ -notmatch "^character_evolving_items$" `
+        -and $_ -notmatch "^character_inspect_messages$" `
+        -and $_ -notmatch "^character_instance_safereturns$" `
+        -and $_ -notmatch "^character_item_recast$" `
+        -and $_ -notmatch "^character_languages$" `
+        -and $_ -notmatch "^character_leadership_abilities$" `
+        -and $_ -notmatch "^character_material$" `
+        -and $_ -notmatch "^character_memmed_spells$" `
+        -and $_ -notmatch "^character_parcels$" `
+        -and $_ -notmatch "^character_parcels_containers$" `
+        -and $_ -notmatch "^character_peqzone_flags$" `
+        -and $_ -notmatch "^character_pet_buffs$" `
+        -and $_ -notmatch "^character_pet_info$" `
+        -and $_ -notmatch "^character_pet_inventory$" `
+        -and $_ -notmatch "^character_pet_name$" `
+        -and $_ -notmatch "^character_potionbelt$" `
+        -and $_ -notmatch "^character_skills$" `
+        -and $_ -notmatch "^character_spells$" `
+    }
+Write-Host ("Tracking tables: " + ($TRACKED_TABLES -join ", "))
 
-Write-Ok "Pushed to git"
-
-# ── Step 7: Advance aot_current ───────────────────────────────────────────────
-
-Write-Status "Advancing $DB_LIVE to match $DB_WORK..."
-$code = Invoke-SQLFile $DB_LIVE $filePath
-if ($code -ne 0) { Die "Failed to apply delta to $DB_LIVE — manual sync may be needed" }
-$null = Invoke-SQL $DB_LIVE "INSERT IGNORE INTO db_migrations (filename) VALUES ('$filename');"
-
-Write-Host ""
-Write-Ok "Done. Delta committed and $DB_LIVE is up to date."
-Exit-Script 0
+# --- The rest of your script follows, using $TRACKED_TABLES ---

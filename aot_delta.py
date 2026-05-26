@@ -197,32 +197,32 @@ def seed_from_archive(live_conn, live_db, seedable_tables):
 def get_primary_keys(conn, db_name, table):
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT column_name
-            FROM information_schema.key_column_usage
-            WHERE table_schema = %s AND table_name = %s
-              AND constraint_name = 'PRIMARY'
-            ORDER BY ordinal_position
+            SELECT COLUMN_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+              AND CONSTRAINT_NAME = 'PRIMARY'
+            ORDER BY ORDINAL_POSITION
         """, (db_name, table))
-        pk_cols = [row['column_name'] for row in cur.fetchall()]
+        pk_cols = [row['COLUMN_NAME'] for row in cur.fetchall()]
         if pk_cols:
             return pk_cols
 
         # Fall back to first UNIQUE constraint if no PRIMARY KEY
         cur.execute("""
-            SELECT kcu.constraint_name, kcu.column_name
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.table_constraints tc
-              ON tc.constraint_schema = kcu.table_schema
-             AND tc.table_name = kcu.table_name
-             AND tc.constraint_name = kcu.constraint_name
-            WHERE kcu.table_schema = %s AND kcu.table_name = %s
-              AND tc.constraint_type = 'UNIQUE'
-            ORDER BY tc.constraint_name, kcu.ordinal_position
+            SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME
+            FROM information_schema.KEY_COLUMN_USAGE kcu
+            JOIN information_schema.TABLE_CONSTRAINTS tc
+              ON tc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+             AND tc.TABLE_NAME = kcu.TABLE_NAME
+             AND tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+            WHERE kcu.TABLE_SCHEMA = %s AND kcu.TABLE_NAME = %s
+              AND tc.CONSTRAINT_TYPE = 'UNIQUE'
+            ORDER BY tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
         """, (db_name, table))
         rows = cur.fetchall()
         if rows:
-            first = rows[0]['constraint_name']
-            return [r['column_name'] for r in rows if r['constraint_name'] == first]
+            first = rows[0]['CONSTRAINT_NAME']
+            return [r['COLUMN_NAME'] for r in rows if r['CONSTRAINT_NAME'] == first]
 
         return []
 
@@ -230,12 +230,12 @@ def get_primary_keys(conn, db_name, table):
 def get_columns(conn, db_name, table):
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-            ORDER BY ordinal_position
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+            ORDER BY ORDINAL_POSITION
         """, (db_name, table))
-        return [row['column_name'] for row in cur.fetchall()]
+        return [row['COLUMN_NAME'] for row in cur.fetchall()]
 
 
 def get_rows(conn, db_name, table, pk_cols):

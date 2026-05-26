@@ -1,5 +1,5 @@
 -- AoTv3 content delta
--- Generated: 2026-05-26 15:05:18
+-- Generated: 2026-05-26 15:13:46
 -- Changed tables: items, lootdrop, lootdrop_entries, loottable, loottable_entries, npc_types, base_data
 
 

@@ -1,9 +1,27 @@
+# Local config — fill in your own credentials
 config.ini
+
+# One-time migration/import utilities
 aot_migrate.py
-aot_delta.py
+copy_deez_to_peq.py
+diff_content.py
+compare_dbs.py
+
+# Python artifacts
 __pycache__/
 *.pyc
 build/
 dist/
 *.spec
 *.exe
+
+# Local environment
+venv/
+*.csv
+
+# Local run script — copy run_delta.bat.example to run_delta.bat
+run_delta.bat
+
+# IDE
+.idea/
+.vscode/

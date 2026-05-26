@@ -1,0 +1,5 @@
+@echo off
+:: Copy this file to run_delta.bat (gitignored) and adjust the path if needed.
+:: Default assumes a venv created with: python -m venv venv
+venv\Scripts\python.exe aot_delta.py
+pause
